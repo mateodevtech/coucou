@@ -21,7 +21,7 @@ configs:
 
 settings:
   base:
-    SWIFT_VERSION: "6.0"
+    SWIFT_VERSION: "5.0"
     ENABLE_HARDENED_RUNTIME: YES
     CODE_SIGN_STYLE: Manual
     OTHER_SWIFT_FLAGS: "-strict-concurrency=complete"

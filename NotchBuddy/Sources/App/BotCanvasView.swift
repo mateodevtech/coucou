@@ -16,179 +16,217 @@ struct BotCanvasView: View {
     @StateObject private var engine = BotEngine()
 
     var body: some View {
-        // Display refresh rate — every frame on a 60 Hz screen, every frame on ProMotion.
-        // MochiFrameClock.advance accumulates the step debt so Mochi's speed never changes.
+        notificationReceivers
+    }
+
+    // The modifier chain is cut in three small pieces, each handler is a method: one big chain of
+    // closures is what the compiler gives up on. Order of the modifiers has no effect on behavior.
+    private var stateObservers: some View {
+        animatedCanvas
+            .onChange(of: state.effectiveState) { _, newState in
+                engine.setState(newState)
+            }
+            #if !APPSTORE
+            .onChange(of: state.voiceActive) { _, on in
+                voiceActiveDidChange(on)
+            }
+            #endif
+            .onChange(of: state.view) { oldView, newView in
+                viewDidChange(from: oldView, to: newView)
+            }
+            .onChange(of: state.mode) { _, newMode in
+                modeDidChange(newMode)
+            }
+    }
+
+    private var actionReceivers: some View {
+        stateObservers
+            .onReceive(NotificationCenter.default.publisher(for: .triggerEmote)) { notif in
+                if let emote = notif.object as? BotEmote { engine.triggerEmote(emote) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .triggerSlap)) { _ in
+                engine.slap()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .botBlink)) { _ in
+                engine.blink()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .botSetTgEs)) { notif in
+                if let v = notif.object as? CGFloat { engine.tgEs = v }
+            }
+    }
+
+    private var notificationReceivers: some View {
+        actionReceivers
+            .onReceive(NotificationCenter.default.publisher(for: .botGulp)) { _ in
+                engine.gulp()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .botMorphTo)) { notif in
+                if let target = notif.object as? CGFloat { morphTo(target) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .botGreet)) { _ in
+                engine.greet()
+            }
+            .onAppear { didAppear() }
+    }
+
+    #if !APPSTORE
+    private func voiceActiveDidChange(_ on: Bool) {
+        if on { engine.enterVoiceCompact() } else { engine.exitVoiceCompact() }
+    }
+    #endif
+
+    private func modeDidChange(_ newMode: IslandMode) {
+        // Hard-reset morph when island collapses
+        if newMode != .expanded {
+            engine.tweens.removeValue(forKey: "morph")
+            engine.locks.remove("morph")
+            engine.morph = 0
+        }
+    }
+
+    private func morphTo(_ target: CGFloat) {
+        let dur: CGFloat = target > 0.5 ? 550 : 650
+        engine.anim("morph", keys: [TweenKey(target: target, duration: dur, ease: Ease.inOut)])
+    }
+
+    private func didAppear() {
+        engine.setState(state.effectiveState, force: true)
+        let isWardrobe = state.mode == .expanded && state.view == .wardrobe
+        let isFocusMain = state.focusId == state.mainPillId || state.focusId == nil
+        let showOutfit = isFocusMain || state.mode != .expanded || isWardrobe
+        engine.setOutfit(showOutfit ? state.resolvedOutfit : .none, animated: false)
+    }
+
+    // `body` used to hold the whole drawing closure and the modifier chain in one expression;
+    // recent Swift compilers give up on it ("unable to type-check this expression in reasonable
+    // time"). Same code, split into pieces the compiler can check one at a time.
+    private var animatedCanvas: some View {
         TimelineView(.animation(paused: state.mode == .hidden || paused)) { timeline in
             // The Canvas must capture the frame's date: a closure that doesn't change from
             // one tick to the next is not redrawn, and Mochi froze.
             let frame = timeline.date
             Canvas { context, size in
                 _ = frame
-                let look = lookXY(state: state)
-                engine.lookX = look.x
-                engine.lookY = look.y
-                engine.particleOverhang = particleOverhang
-                // Widen slot when file is hovering over the mailbox (morph > 0.5)
-                // Open mouth (hover=0.20R) when file dragged over box; close when not
-                if engine.morph > 0.3 {
-                    engine.slotHTarget = state.fileDragOver ? 0.20 : 0
-                } else {
-                    engine.slotHTarget = 0
-                    if engine.morph < 0.05 { engine.slotH = 0; engine.slotHVel = 0 }
-                }
-                // Integration pills have a fixed brand color → use it as bodyColor.
-                // Claude Code tasks use state-based gradient (working=blue, thinking=purple, etc.).
-                #if !APPSTORE
-                if state.showingPlanDetail {
-                    let hex = state.planDetailIsCodex
-                        ? CodexPlanGauge.color(state.codexPlanUsage)
-                        : ClaudePlanGauge.color(for: state.claudePlanUsage.flatMap { ClaudePlanGauge.dominantPct($0) })
-                    engine.bodyColor = cgColorFromHex(hex)
-                } else {
-                    engine.bodyColor = (state.focusTask?.isIntegration == true)
-                        ? cgColorFromHex(state.focusTask!.color)
-                        : nil
-                }
-                #else
-                engine.bodyColor = (state.focusTask?.isIntegration == true)
-                    ? cgColorFromHex(state.focusTask!.color)
-                    : nil
-                #endif
-
-                // Compute shouldDance per-frame (no observer lag)
-                let dancing: Bool = {
-                    #if !APPSTORE
-                    let active = AppState.shared.activeIntegrations
-                    let music = AppState.shared.musicPlaying && active.contains("integration_music")
-                    let spotify = SpotifyController.shared.isPlaying && active.contains(SpotifyController.pillId)
-                    guard music || spotify else { return false }
-                    let allowed: Set<BotState> = [.idle, .working, .thinking, .searching, .finished]
-                    guard allowed.contains(state.effectiveState) else { return false }
-                    if state.mode == .compact { return true }
-                    guard state.mode == .expanded && state.view == .overview else { return false }
-                    return (music && state.focusId == "integration_music")
-                        || (spotify && state.focusId == SpotifyController.pillId)
-                    #else
-                    return false
-                    #endif
-                }()
-                engine.setDancing(dancing)
-                let isWardrobe = state.mode == .expanded && state.view == .wardrobe
-                let isFocusMain = state.focusId == state.mainPillId || state.focusId == nil
-                let showOutfit = isFocusMain || state.mode != .expanded || isWardrobe
-                engine.setOutfit(showOutfit ? state.resolvedOutfit : .none,
-                                 animated: state.view != .wardrobe)
-
-                #if !APPSTORE
-                if state.view == .listening {
-                    // Expanded listening view only (no longer used by voice, kept for the
-                    // view itself). Smoothed so the eyes do not follow every mic frame.
-                    let target = CGFloat(VoiceEngine.shared.micLevel)
-                    engine.listeningLevel += (target - engine.listeningLevel) * 0.12
-                    engine.listeningHasWords = !VoiceEngine.shared.commandTranscript.isEmpty
-                } else if state.voiceActive && state.mode == .compact {
-                    // Compact voice: feed mic level for the listening sub-state eye pulse.
-                    let target = CGFloat(VoiceEngine.shared.micLevel)
-                    engine.listeningLevel += (target - engine.listeningLevel) * 0.12
-                }
-                // Propagate voice sub-state every frame so BotEngine gets transitions promptly.
-                if state.voiceActive { engine.voiceSubState = state.voiceSubState }
-                else if engine.voiceSubState != .none { engine.voiceSubState = .none }
-                #endif
-
-                MochiFrameClock.advance(engine)
-                var ctx = context
-                engine.applyDance(&ctx, size: size)
-                // Rigid-roll: when Mochi wears an outfit (presence > 0.05) and is rolling,
-                // rotate the entire body+accessories context around the body center so the
-                // whole character genuinely turns. Particles/badge (drawHandsAndExtras) are
-                // drawn outside the rotated context and do not spin.
-                if engine.outfit != .none && engine.outfitPresence > 0.05 && abs(engine.roll) > 0.001 {
-                    let center = engine.bodyCenter(size: size)
-                    var rigidCtx = ctx
-                    rigidCtx.translateBy(x: center.x, y: center.y)
-                    rigidCtx.rotate(by: .radians(engine.roll))
-                    rigidCtx.translateBy(x: -center.x, y: -center.y)
-                    engine.drawHandsBehind(context: rigidCtx, size: size)
-                    engine.drawOutfitBehind(context: rigidCtx, size: size)
-                    engine.draw(context: rigidCtx, size: size)
-                    engine.drawOutfitFront(context: rigidCtx, size: size)
-                } else {
-                    engine.drawHandsBehind(context: ctx, size: size)
-                    engine.drawOutfitBehind(context: ctx, size: size)
-                    engine.draw(context: ctx, size: size)
-                    engine.drawOutfitFront(context: ctx, size: size)
-                }
-                engine.drawHandsAndExtras(context: ctx, size: size)
+                drawFrame(context: context, size: size)
             }
         }
-        .onChange(of: state.effectiveState) { _, newState in
-            engine.setState(newState)
+    }
+
+    /// One frame of Mochi: eye tracking, colors, dance, outfit, voice sub-state, then the draw calls.
+    private func drawFrame(context: GraphicsContext, size: CGSize) {
+        let look = lookXY(state: state)
+        engine.lookX = look.x
+        engine.lookY = look.y
+        engine.particleOverhang = particleOverhang
+        // Widen slot when file is hovering over the mailbox (morph > 0.5)
+        // Open mouth (hover=0.20R) when file dragged over box; close when not
+        if engine.morph > 0.3 {
+            engine.slotHTarget = state.fileDragOver ? 0.20 : 0
+        } else {
+            engine.slotHTarget = 0
+            if engine.morph < 0.05 { engine.slotH = 0; engine.slotHVel = 0 }
+        }
+        // Integration pills have a fixed brand color → use it as bodyColor.
+        // Claude Code tasks use state-based gradient (working=blue, thinking=purple, etc.).
+        #if !APPSTORE
+        if state.showingPlanDetail {
+            let hex = state.planDetailIsCodex
+                ? CodexPlanGauge.color(state.codexPlanUsage)
+                : ClaudePlanGauge.color(for: state.claudePlanUsage.flatMap { ClaudePlanGauge.dominantPct($0) })
+            engine.bodyColor = cgColorFromHex(hex)
+        } else {
+            engine.bodyColor = (state.focusTask?.isIntegration == true)
+                ? cgColorFromHex(state.focusTask!.color)
+                : nil
+        }
+        #else
+        engine.bodyColor = (state.focusTask?.isIntegration == true)
+            ? cgColorFromHex(state.focusTask!.color)
+            : nil
+        #endif
+
+        // Compute shouldDance per-frame (no observer lag)
+        let dancing: Bool = {
+            #if !APPSTORE
+            let active = AppState.shared.activeIntegrations
+            let music = AppState.shared.musicPlaying && active.contains("integration_music")
+            let spotify = SpotifyController.shared.isPlaying && active.contains(SpotifyController.pillId)
+            guard music || spotify else { return false }
+            let allowed: Set<BotState> = [.idle, .working, .thinking, .searching, .finished]
+            guard allowed.contains(state.effectiveState) else { return false }
+            if state.mode == .compact { return true }
+            guard state.mode == .expanded && state.view == .overview else { return false }
+            return (music && state.focusId == "integration_music")
+                || (spotify && state.focusId == SpotifyController.pillId)
+            #else
+            return false
+            #endif
+        }()
+        engine.setDancing(dancing)
+        let isWardrobe = state.mode == .expanded && state.view == .wardrobe
+        let isFocusMain = state.focusId == state.mainPillId || state.focusId == nil
+        let showOutfit = isFocusMain || state.mode != .expanded || isWardrobe
+        engine.setOutfit(showOutfit ? state.resolvedOutfit : .none,
+                         animated: state.view != .wardrobe)
+
+        #if !APPSTORE
+        if state.view == .listening {
+            // Expanded listening view only (no longer used by voice, kept for the
+            // view itself). Smoothed so the eyes do not follow every mic frame.
+            let target = CGFloat(VoiceEngine.shared.micLevel)
+            engine.listeningLevel += (target - engine.listeningLevel) * 0.12
+            engine.listeningHasWords = !VoiceEngine.shared.commandTranscript.isEmpty
+        } else if state.voiceActive && state.mode == .compact {
+            // Compact voice: feed mic level for the listening sub-state eye pulse.
+            let target = CGFloat(VoiceEngine.shared.micLevel)
+            engine.listeningLevel += (target - engine.listeningLevel) * 0.12
+        }
+        // Propagate voice sub-state every frame so BotEngine gets transitions promptly.
+        if state.voiceActive { engine.voiceSubState = state.voiceSubState }
+        else if engine.voiceSubState != .none { engine.voiceSubState = .none }
+        #endif
+
+        MochiFrameClock.advance(engine)
+        var ctx = context
+        engine.applyDance(&ctx, size: size)
+        // Rigid-roll: when Mochi wears an outfit (presence > 0.05) and is rolling,
+        // rotate the entire body+accessories context around the body center so the
+        // whole character genuinely turns. Particles/badge (drawHandsAndExtras) are
+        // drawn outside the rotated context and do not spin.
+        if engine.outfit != .none && engine.outfitPresence > 0.05 && abs(engine.roll) > 0.001 {
+            let center = engine.bodyCenter(size: size)
+            var rigidCtx = ctx
+            rigidCtx.translateBy(x: center.x, y: center.y)
+            rigidCtx.rotate(by: .radians(engine.roll))
+            rigidCtx.translateBy(x: -center.x, y: -center.y)
+            engine.drawHandsBehind(context: rigidCtx, size: size)
+            engine.drawOutfitBehind(context: rigidCtx, size: size)
+            engine.draw(context: rigidCtx, size: size)
+            engine.drawOutfitFront(context: rigidCtx, size: size)
+        } else {
+            engine.drawHandsBehind(context: ctx, size: size)
+            engine.drawOutfitBehind(context: ctx, size: size)
+            engine.draw(context: ctx, size: size)
+            engine.drawOutfitFront(context: ctx, size: size)
+        }
+        engine.drawHandsAndExtras(context: ctx, size: size)
+    }
+
+    private func viewDidChange(from oldView: IslandView, to newView: IslandView) {
+        // Morph up when upload view is active
+        if state.mode == .expanded && newView == .upload {
+            engine.anim("morph", keys: [TweenKey(target: 1, duration: 550, ease: Ease.inOut)])
+        } else if newView != .upload && newView != .uploading && engine.morph > 0.01 {
+            // Any other view (not mid-gulp): morph back
+            engine.anim("morph", keys: [TweenKey(target: 0, duration: 550, ease: Ease.inOut)])
         }
         #if !APPSTORE
-        .onChange(of: state.voiceActive) { _, on in
-            if on { engine.enterVoiceCompact() } else { engine.exitVoiceCompact() }
+        if newView == .listening {
+            engine.enterListening()
+        } else if oldView == .listening {
+            engine.exitListening(hadCommand: !VoiceEngine.shared.commandTranscript.isEmpty)
         }
         #endif
-        .onChange(of: state.view) { oldView, newView in
-            // Morph up when upload view is active
-            if state.mode == .expanded && newView == .upload {
-                engine.anim("morph", keys: [TweenKey(target: 1, duration: 550, ease: Ease.inOut)])
-            } else if newView != .upload && newView != .uploading && engine.morph > 0.01 {
-                // Any other view (not mid-gulp): morph back
-                engine.anim("morph", keys: [TweenKey(target: 0, duration: 550, ease: Ease.inOut)])
-            }
-            #if !APPSTORE
-            if newView == .listening {
-                engine.enterListening()
-            } else if oldView == .listening {
-                engine.exitListening(hadCommand: !VoiceEngine.shared.commandTranscript.isEmpty)
-            }
-            #endif
-        }
-        .onChange(of: state.mode) { _, newMode in
-            // Hard-reset morph when island collapses
-            if newMode != .expanded {
-                engine.tweens.removeValue(forKey: "morph")
-                engine.locks.remove("morph")
-                engine.morph = 0
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .triggerEmote)) { notif in
-            if let emote = notif.object as? BotEmote {
-                engine.triggerEmote(emote)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .triggerSlap)) { _ in
-            engine.slap()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .botBlink)) { _ in
-            engine.blink()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .botSetTgEs)) { notif in
-            if let v = notif.object as? CGFloat {
-                engine.tgEs = v
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .botGulp)) { _ in
-            engine.gulp()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .botMorphTo)) { notif in
-            if let target = notif.object as? CGFloat {
-                let dur: CGFloat = target > 0.5 ? 550 : 650
-                engine.anim("morph", keys: [TweenKey(target: target, duration: dur, ease: Ease.inOut)])
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .botGreet)) { _ in
-            engine.greet()
-        }
-        .onAppear {
-            engine.setState(state.effectiveState, force: true)
-            let isWardrobe = state.mode == .expanded && state.view == .wardrobe
-            let isFocusMain = state.focusId == state.mainPillId || state.focusId == nil
-            let showOutfit = isFocusMain || state.mode != .expanded || isWardrobe
-            engine.setOutfit(showOutfit ? state.resolvedOutfit : .none, animated: false)
-        }
     }
 
     /// Where Mochi looks (the pointer), both axes at once: the island geometry and the
