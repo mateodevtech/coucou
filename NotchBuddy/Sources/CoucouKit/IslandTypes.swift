@@ -101,6 +101,8 @@ enum ChatProvider: String, CaseIterable, Codable {
     case deepseek  = "deepseek"
     case qwen      = "qwen"
     case moonshot  = "moonshot"
+    case groq      = "groq"
+    case openrouter = "openrouter"
 
     var displayName: String {
         switch self {
@@ -112,6 +114,8 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "DeepSeek"
         case .qwen:      "Qwen"
         case .moonshot:  "Moonshot"
+        case .groq:      "Groq"
+        case .openrouter: "OpenRouter"
         }
     }
 
@@ -125,6 +129,8 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "#5B8FF9"
         case .qwen:      "#FF6A00"
         case .moonshot:  "#7C5CFC"
+        case .groq:      "#F55036"
+        case .openrouter: "#6467F2"
         }
     }
 
@@ -138,6 +144,8 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "deepseek-chat"
         case .qwen:      "qwen-max"
         case .moonshot:  "moonshot-v1-32k"
+        case .groq:      "llama-3.3-70b-versatile"
+        case .openrouter: "meta-llama/llama-3.3-70b-instruct:free"
         }
     }
 
@@ -151,6 +159,8 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "deepseek-api-key"
         case .qwen:      "qwen-api-key"
         case .moonshot:  "moonshot-api-key"
+        case .groq:      "groq-api-key"
+        case .openrouter: "openrouter-api-key"
         }
     }
 
@@ -168,6 +178,8 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "ai_deepseek"
         case .qwen:      "ai_qwen"
         case .moonshot:  "ai_moonshot"
+        case .groq:      "ai_groq"
+        case .openrouter: "ai_openrouter"
         }
     }
 
@@ -181,6 +193,8 @@ enum ChatProvider: String, CaseIterable, Codable {
         case "ai_deepseek":  self = .deepseek
         case "ai_qwen":      self = .qwen
         case "ai_moonshot":  self = .moonshot
+        case "ai_groq":      self = .groq
+        case "ai_openrouter": self = .openrouter
         default:             return nil
         }
     }

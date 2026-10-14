@@ -91,6 +91,8 @@ struct SettingsView: View {
     @State private var deepseekKey: String = KeychainStore.shared.get("deepseek-api-key") ?? ""
     @State private var qwenKey: String     = KeychainStore.shared.get("qwen-api-key") ?? ""
     @State private var moonshotKey: String = KeychainStore.shared.get("moonshot-api-key") ?? ""
+    @State private var groqKey: String = KeychainStore.shared.get("groq-api-key") ?? ""
+    @State private var openRouterKey: String = KeychainStore.shared.get("openrouter-api-key") ?? ""
     @State private var ollamaURL:    String = AppState.shared.ollamaServerURL
     @State private var lmstudioURL:  String = AppState.shared.lmstudioServerURL
     @State private var connectingOllama:    Bool = false
@@ -1117,6 +1119,38 @@ struct SettingsView: View {
                     statusMessage = "Moonshot key saved."
                 }
                 .buttonStyle(.borderedProminent)
+
+                Divider()
+
+                HStack(spacing: 8) {
+                    Circle().fill(Color(hex: "#F55036")).frame(width: 8, height: 8)
+                    Text("Groq (free tier)").font(.system(size: 12, weight: .semibold))
+                }
+                SecureField("API key", text: $groqKey)
+                    .textFieldStyle(.roundedBorder)
+                Button(String(localized: "Save")) {
+                    KeychainStore.shared.set("groq-api-key", value: groqKey)
+                    statusMessage = "Groq key saved."
+                }
+                .buttonStyle(.borderedProminent)
+
+                Divider()
+
+                HStack(spacing: 8) {
+                    Circle().fill(Color(hex: "#6467F2")).frame(width: 8, height: 8)
+                    Text("OpenRouter (free models)").font(.system(size: 12, weight: .semibold))
+                }
+                SecureField("API key", text: $openRouterKey)
+                    .textFieldStyle(.roundedBorder)
+                Button(String(localized: "Save")) {
+                    KeychainStore.shared.set("openrouter-api-key", value: openRouterKey)
+                    statusMessage = "OpenRouter key saved."
+                }
+                .buttonStyle(.borderedProminent)
+
+                Text("Online models send your messages to the provider. For sensitive content, prefer a local model (Ollama or LM Studio).")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
             }
             .padding(.vertical, 4)
         }

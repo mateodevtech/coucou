@@ -145,6 +145,14 @@ final class AppState: ObservableObject {
     @Published var moonshotChatModel: String = ChatProvider.moonshot.defaultModel {
         didSet { UserDefaults.standard.set(moonshotChatModel, forKey: "moonshotChatModel") }
     }
+    @Published var groqChatModel: String = ChatProvider.groq.defaultModel {
+        didSet { UserDefaults.standard.set(groqChatModel, forKey: "groqChatModel") }
+    }
+    @Published var openRouterChatModel: String = ChatProvider.openrouter.defaultModel {
+        didSet { UserDefaults.standard.set(openRouterChatModel, forKey: "openRouterChatModel") }
+    }
+    /// Online providers whose privacy reminder was already shown since launch.
+    private var cloudNoticeShown: Set<ChatProvider> = []
     @Published var ollamaServerURL: String = "" {
         didSet { UserDefaults.standard.set(ollamaServerURL, forKey: "ollamaServerURL") }
     }
@@ -217,6 +225,12 @@ final class AppState: ObservableObject {
             case .deepseek:  models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://api.deepseek.com/v1", apiKey: apiKey)
             case .qwen:      models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", apiKey: apiKey)
             case .moonshot:  models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://api.moonshot.cn/v1", apiKey: apiKey)
+            case .groq:      models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://api.groq.com/openai/v1", apiKey: apiKey)
+            case .openrouter:
+                // Free models only (ids ending in ":free"), so a click never spends credits.
+                let all = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://openrouter.ai/api/v1", apiKey: apiKey)
+                let free = all.filter { $0.id.hasSuffix(":free") }
+                models = free.isEmpty ? all : free
             case .ollama, .lmstudio: models = []  // handled above
             }
             loadingProviderModels.remove(provider)
@@ -249,10 +263,30 @@ final class AppState: ObservableObject {
                     if !models.contains(where: { $0.id == moonshotChatModel }) {
                         moonshotChatModel = models.first!.id
                     }
+                case .groq:
+                    if !models.contains(where: { $0.id == groqChatModel }) {
+                        groqChatModel = models.first!.id
+                    }
+                case .openrouter:
+                    if !models.contains(where: { $0.id == openRouterChatModel }) {
+                        openRouterChatModel = models.first!.id
+                    }
                 case .ollama, .lmstudio: break
                 }
             }
         }
+    }
+
+    /// Shows a formal reminder in the chat the first time an online model is used.
+    /// UI only: it is not sent to the model.
+    func noteCloudPrivacyIfNeeded() {
+        let provider = chatProvider
+        guard !provider.isLocal, !cloudNoticeShown.contains(provider) else { return }
+        cloudNoticeShown.insert(provider)
+        chatHistory.append(ChatMessage(
+            role: .assistant,
+            content: "Reminder: \(provider.displayName) is an online model. Your messages, and any file or context you attach, are sent to \(provider.displayName). Free tiers may use them to improve their models. For sensitive content, switch to a local model (Ollama or LM Studio) from the model picker."
+        ))
     }
 
     /// The model currently active for chat (provider-aware).
@@ -266,6 +300,8 @@ final class AppState: ObservableObject {
         case .deepseek:  return deepseekChatModel
         case .qwen:      return qwenChatModel
         case .moonshot:  return moonshotChatModel
+        case .groq:      return groqChatModel
+        case .openrouter: return openRouterChatModel
         }
     }
 
@@ -534,6 +570,8 @@ final class AppState: ObservableObject {
         if let v = ud.string(forKey: "deepseekChatModel"), !v.isEmpty { deepseekChatModel = v }
         if let v = ud.string(forKey: "qwenChatModel"),     !v.isEmpty { qwenChatModel     = v }
         if let v = ud.string(forKey: "moonshotChatModel"), !v.isEmpty { moonshotChatModel = v }
+        if let v = ud.string(forKey: "groqChatModel"), !v.isEmpty { groqChatModel = v }
+        if let v = ud.string(forKey: "openRouterChatModel"), !v.isEmpty { openRouterChatModel = v }
         if let v = ud.string(forKey: "ollamaServerURL"), !v.isEmpty { ollamaServerURL = v }
         if let v = ud.string(forKey: "lmstudioServerURL"), !v.isEmpty { lmstudioServerURL = v }
         // Migrate old 60s default → 15s

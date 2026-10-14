@@ -67,6 +67,8 @@ final class KeychainStore: @unchecked Sendable {
         "deepseek-api-key",
         "qwen-api-key",
         "moonshot-api-key",
+        "groq-api-key",
+        "openrouter-api-key",
         "resend-api-key", "resend-from",
         "n8n-url", "n8n-api-key",
         "vercel-token",
@@ -248,6 +250,8 @@ final class ClaudeService {
             state.stateOverride = nil
             return
         }
+        // Formal reminder the first time an online model is used (once per provider, per launch).
+        state.noteCloudPrivacyIfNeeded()
         guard state.chatProvider == .anthropic else {
             await chatOpenAICompatible(query: query, context: context, state: state)
             return
@@ -313,6 +317,8 @@ final class ClaudeService {
             case .deepseek:  baseURL = "https://api.deepseek.com/v1"
             case .qwen:      baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
             case .moonshot:  baseURL = "https://api.moonshot.cn/v1"
+            case .groq:      baseURL = "https://api.groq.com/openai/v1"
+            case .openrouter: baseURL = "https://openrouter.ai/api/v1"
             case .anthropic, .ollama, .lmstudio: baseURL = ""
             }
         }
@@ -377,7 +383,7 @@ final class ClaudeService {
         msgs.append(["role": "user", "content": userText])
         conversationMessages.append(["role": "user", "content": userText])
 
-        let useStream = provider.isLocal || provider == .deepseek || provider == .qwen || provider == .moonshot
+        let useStream = provider.isLocal || provider == .deepseek || provider == .qwen || provider == .moonshot || provider == .groq || provider == .openrouter
         var body: [String: Any] = [
             "model": state.activeChatModel,
             "max_tokens": 4096,

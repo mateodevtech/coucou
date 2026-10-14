@@ -1602,6 +1602,8 @@ struct ModelPickerView: View {
                             case .deepseek:  state.deepseekChatModel = model.id
                             case .qwen:      state.qwenChatModel = model.id
                             case .moonshot:  state.moonshotChatModel = model.id
+                            case .groq:      state.groqChatModel = model.id
+                            case .openrouter: state.openRouterChatModel = model.id
                             }
                             isPresented = false
                             SoundEngine.shared.play("blip")
