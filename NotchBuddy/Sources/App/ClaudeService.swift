@@ -76,6 +76,7 @@ final class KeychainStore: @unchecked Sendable {
         "stripe-api-key",
         "calcom-api-key",
         "notion-api-key",
+        "smtp-gmail-address", "smtp-gmail-app-password",
         "elevenlabs-api-key",
         // Portfolio exchange credentials
         "portfolio-binance-key",  "portfolio-binance-secret",

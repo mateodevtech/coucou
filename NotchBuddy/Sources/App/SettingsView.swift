@@ -5,6 +5,10 @@ import AppKit
 struct SettingsView: View {
     @ObservedObject private var state = AppState.shared
     @ObservedObject private var demoEngine = DemoEngine.shared
+    #if !APPSTORE
+    @ObservedObject private var telegramAction = TelegramCodeAction.shared
+    @ObservedObject private var retrievedCode = RetrievedCodeStore.shared
+    #endif
     @State private var apiKey: String = KeychainStore.shared.get("anthropic-api-key") ?? ""
 
     // Claude model — dynamic list fetched from the API, static fallback if unavailable
@@ -93,6 +97,11 @@ struct SettingsView: View {
     @State private var moonshotKey: String = KeychainStore.shared.get("moonshot-api-key") ?? ""
     @State private var groqKey: String = KeychainStore.shared.get("groq-api-key") ?? ""
     @State private var openRouterKey: String = KeychainStore.shared.get("openrouter-api-key") ?? ""
+    #if !APPSTORE
+    @State private var smtpAddress: String = KeychainStore.shared.get("smtp-gmail-address") ?? ""
+    @State private var smtpAppPassword: String = KeychainStore.shared.get("smtp-gmail-app-password") ?? ""
+    @State private var telegramActionConfig: ActionConfig = ActionPermissions.load(TelegramCodeAction.actionId)
+    #endif
     @State private var ollamaURL:    String = AppState.shared.ollamaServerURL
     @State private var lmstudioURL:  String = AppState.shared.lmstudioServerURL
     @State private var connectingOllama:    Bool = false
@@ -188,6 +197,9 @@ struct SettingsView: View {
                         SettingsSidebarRow(title: "Chat",         icon: "bubble.left.and.bubble.right.fill", color: "#E07950").tag("chat")
                         SettingsSidebarRow(title: "Integrations", icon: "puzzlepiece.extension.fill",        color: "#7C5CFF").tag("integrations")
                         #if !APPSTORE
+                        SettingsSidebarRow(title: "Actions",       icon: "bolt.shield.fill",                  color: "#22C55E").tag("actions")
+                        #endif
+                        #if !APPSTORE
                         SettingsSidebarRow(title: "Voice",        icon: "mic.fill",                          color: "#F97316").tag("voice")
                         #endif
                         SettingsSidebarRow(title: "Shortcuts",    icon: "keyboard.fill",                     color: "#6366F1").tag("shortcuts")
@@ -258,6 +270,9 @@ struct SettingsView: View {
         case "agents":       return String(localized: "Agents")
         case "chat":         return String(localized: "Chat")
         case "integrations": return String(localized: "Integrations")
+        #if !APPSTORE
+        case "actions":      return String(localized: "Actions")
+        #endif
         case "voice":        return String(localized: "Voice")
         case "shortcuts":    return String(localized: "Shortcuts")
         default:             return String(localized: "General")
@@ -270,6 +285,9 @@ struct SettingsView: View {
         case "agents":       agentsSection
         case "chat":         chatSection
         case "integrations": integrationsSection
+        #if !APPSTORE
+        case "actions":      actionsSection
+        #endif
         #if !APPSTORE
         case "voice":        voiceSection
         #endif
@@ -1232,6 +1250,136 @@ struct SettingsView: View {
             .padding(.vertical, 4)
         }
     }
+
+    // MARK: - Actions section (the shared "cadre Actions": permissions, trigger, audit)
+
+    #if !APPSTORE
+    @ViewBuilder private var actionsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+
+            GroupBox("SMTP (Gmail)") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Used to mail you anything an Action retrieves — a verification code, for instance. Use a Gmail App Password, never your account password.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    TextField("Gmail address", text: $smtpAddress)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField("App Password", text: $smtpAppPassword)
+                        .textFieldStyle(.roundedBorder)
+                    Button(String(localized: "Save")) {
+                        KeychainStore.shared.set("smtp-gmail-address", value: smtpAddress)
+                        KeychainStore.shared.set("smtp-gmail-app-password", value: smtpAppPassword)
+                        statusMessage = "SMTP credentials saved."
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.vertical, 4)
+            }
+
+            GroupBox("Telegram — récupération de code") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Portée : \(TelegramCodeAction.defaultTarget). Aucune autre discussion n'est touchée.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+
+                    Toggle("Activer cette Action", isOn: Binding(
+                        get: { telegramActionConfig.enabled },
+                        set: { newValue in
+                            telegramActionConfig.enabled = newValue
+                            if newValue && !telegramActionConfig.allowedTargets.contains(TelegramCodeAction.defaultTarget) {
+                                telegramActionConfig.allowedTargets.append(TelegramCodeAction.defaultTarget)
+                            }
+                            ActionPermissions.save(telegramActionConfig, for: TelegramCodeAction.actionId)
+                        }
+                    ))
+
+                    Picker("Rétention locale du code", selection: Binding(
+                        get: { telegramActionConfig.retention },
+                        set: { newValue in
+                            telegramActionConfig.retention = newValue
+                            ActionPermissions.save(telegramActionConfig, for: TelegramCodeAction.actionId)
+                        }
+                    )) {
+                        Text("Suppression rapide (15 min)").tag(ActionRetention.quickExpiry)
+                        Text("Historique (jusqu'à suppression manuelle)").tag(ActionRetention.history)
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    Divider()
+
+                    HStack(spacing: 10) {
+                        Button("Lancer maintenant (ponctuel, 15 min)") {
+                            TelegramCodeAction.shared.startOnDemand()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!telegramActionConfig.enabled || telegramAction.isWatching)
+
+                        if telegramAction.isWatching {
+                            Button("Arrêter la surveillance") {
+                                TelegramCodeAction.shared.stop()
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button("Activer la surveillance permanente") {
+                                TelegramCodeAction.shared.startPermanent()
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!telegramActionConfig.enabled)
+                        }
+                    }
+
+                    if telegramAction.isWatching {
+                        Label("Surveillance active", systemImage: "eye.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(.green)
+                    }
+
+                    if let entry = retrievedCode.current {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Dernier code récupéré").font(.system(size: 11, weight: .semibold))
+                            HStack {
+                                Text(entry.code).font(.system(size: 16, weight: .bold, design: .monospaced))
+                                Button("Copier") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(entry.code, forType: .string)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            if let expiresAt = entry.expiresAt {
+                                Text("Expire à \(expiresAt.formatted(date: .omitted, time: .standard))")
+                                    .font(.system(size: 10)).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            GroupBox("Journal d'audit (dernières entrées)") {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 3) {
+                        let lines = ActionAudit.tail(limit: 30)
+                        if lines.isEmpty {
+                            Text("Rien à afficher pour l'instant.")
+                                .font(.system(size: 11)).foregroundColor(.secondary)
+                        } else {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+            }
+        }
+    }
+    #endif
 
     // MARK: - Integrations section
 
